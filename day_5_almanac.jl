@@ -15,6 +15,7 @@ Eg, in the test seed-to-soil map we have:
 `50 98 2`
 which maps seeds 98-99 to soils 50-51
 =#
+using Base.Threads
 
 # Part 1
 # We're going to need to parse this file as blocks and make some
@@ -39,7 +40,7 @@ HEADER_TO_MAP = [  # ordered header groupings
 """
 Parses the seeds string into a vector of numbers for later consumption
 """
-function seeds_parser(str::String)
+function seeds_parser_part_1(str::String)
     # structure: `seeds: X Y Z...`
     !occursin(r"^seeds", str) && return Int[]
     values_str = last(split(str, ":"))
@@ -78,7 +79,7 @@ end
 Parses a provided filename as though it is the Elf gardener almanac. It does
 not have any checks for the structure.
 """
-function almanac_parser(filename::String)
+function almanac_parser(filename::String; seeds_fn::Function=seeds_parser_part_1)
     seeds = Int[]
     mappings = Dict{String, Dict}()
     open(filename, "r") do f
@@ -89,7 +90,7 @@ function almanac_parser(filename::String)
             line_no += 1
             # Make this a parser function later
             if line_no == 1
-                seeds = seeds_parser(curr_line)
+                seeds = seeds_fn(curr_line)
                 @debug line_no, typeof(curr_line), curr_line, seeds
             else
                 # We're processing a header, a newline, or a body
@@ -139,21 +140,50 @@ function find_seed_data(
     return values
 end
 
-function find_smallest_location(filename::String)
-    seeds, mappings = almanac_parser(filename)
+function find_smallest_location(filename::String; seeds_fn::Function=seeds_parser_part_1)
+    seeds, mappings = almanac_parser(filename; seeds_fn=seeds_fn)
+    curr_min = repeat([Inf], Threads.nthreads())
+    curr_idx = ones(Int, Threads.nthreads())
+    printer = max(1, min(floor(Int, length(seeds)/10), 1000000))
+    @debug printer
 
-    seed_to_loc = Dict()
-    for seed in seeds
+    Threads.@threads for seed in seeds
+        tid = Threads.threadid()
+        idx = curr_idx[tid]
         @debug "==== seed: $seed ===="
         value = find_seed_data(seed, mappings)
         loc = value["location"]
         @debug seed, loc
-        push!(seed_to_loc, seed => loc)
+        curr_min[tid] = min(curr_min[tid], loc)
+        if idx % printer == 0
+            @info "Thread: $(tid), Total checks: $(idx), Current min: $(curr_min[tid])"
+        end
+        curr_idx[tid] += 1
     end
-    return minimum(values(seed_to_loc))
+    return Int(minimum(curr_min))
 end
 
 find_smallest_location("data\\day_5_sample.txt")
 
-
 find_smallest_location("data\\day_5_almanac.txt")
+
+# Part 2
+# Seeds are now ranges, paired as `A b A b...` where the range is A to A+b-1
+
+function seeds_parser_part_2(str::String)
+    # We still need all the numbers, sooooooo
+    raw_seeds = seeds_parser_part_1(str)
+    new_seeds = Int[]
+    i = 1
+    while i <= length(raw_seeds)
+        start = raw_seeds[i]
+        offset = raw_seeds[i+1]
+        range = (start):(start+offset-1)
+        append!(new_seeds, collect(range))
+        i += 2
+    end
+    return new_seeds
+end
+
+find_smallest_location("data\\day_5_sample.txt"; seeds_fn=seeds_parser_part_2)
+find_smallest_location("data\\day_5_almanac.txt"; seeds_fn=seeds_parser_part_2)
